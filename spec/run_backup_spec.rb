@@ -18,9 +18,9 @@ class RunBackup
         '1000          /user/xxx/BACKUP/table-2/part-m-000002',
     ]
 
-    return [0, back_up_root_result] if cmd.end_with? '/user/xxx/BACKUP'
-    return [0, back_up_sub_folder_result_1] if cmd.end_with? '/user/xxx/BACKUP/table-1'
-    return [0, back_up_sub_folder_result_2] if cmd.end_with? '/user/xxx/BACKUP/table-2'
+    return [1, back_up_root_result] if cmd.end_with? '/user/xxx/BACKUP'
+    return [1, back_up_sub_folder_result_1] if cmd.end_with? '/user/xxx/BACKUP/table-1'
+    return [1, back_up_sub_folder_result_2] if cmd.end_with? '/user/xxx/BACKUP/table-2'
     [1, ['error']]
   end
 end
