@@ -9,21 +9,20 @@ class RunBackup
     hdfs_tables = get_catalogs_with_size(hdfs_path)
 
     total_size = get_size_from_folders(hdfs_tables)
-    msg = "size #{hdfs_path} in #{hdfs_tables.length} sub-folders is #{total_size}"
+    msg = "size #{hdfs_path} in #{hdfs_tables.length} table-folders is #{total_size}"
     log.info msg
 
-    hdfs_tables.each do |sub, size|
-      table_name = get_last_name_from_path(sub)
-      puts "root - #{sub} - #{size}"
-      log.info "root - #{sub} - #{size}"
-      log.info "table_name - #{table_name}"
+    hdfs_tables.each do |table_path, size|
+      table_name = get_last_name_from_path(table_path)
+      puts "table'#{table_path}' size: #{size}"
+      log.info "table'#{table_path}' size: #{size}"
       mkdir("hdfs-to-s3/#{table_name}")
 
-      get_catalogs_with_size(sub).each do |hdfs_file_path, s|
+      get_catalogs_with_size(table_path).each do |hdfs_file_path, file_size|
         file_name = get_last_name_from_path(hdfs_file_path)
-        log.info " sub  - #{hdfs_file_path} - #{s}"
-        log.info " file_name - #{file_name}"
-        copy_local(hdfs_file_path, file_name, table_name) do |local_file, folder|
+        log.info "hdsf_file '#{hdfs_file_path}' size:#{file_size}"
+        log.info "file_name:''#{file_name}"
+        copy_local(hdfs_file_path, file_name, file_size, table_name) do |local_file, folder|
           transfer_to_s3(local_file, folder, s3_dir)
         end
       end
@@ -35,13 +34,14 @@ class RunBackup
     shell_cmd("mkdir -p #{dir}")
   end
 
-  def copy_local(hdfs_file_path, file_name, folder, &block)
+  def copy_local(hdfs_file_path, file_name, file_size, folder, &block)
     shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{folder}")
     block.call(file_name, folder)
     shell_cmd "rm -f hdfs-to-s3/#{folder}/#{file_name}"
   end
 
   def transfer_to_s3(file, folder, s3_dir)
+    return 0 if file == '_logs'
     with_retry(50, "#{file} => #{s3_dir}") {
       ret_code, files = shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{folder}/#{file} s3://companybook-backup/#{s3_dir}/#{folder}/#{file}")
       ret_code
@@ -53,8 +53,8 @@ class RunBackup
   end
 
   def get_catalogs_with_size(path='')
-    puts "getting sub folders of #{path}"
-    log.info "getting sub folders of #{path}"
+    puts "getting table_path folders of #{path}"
+    log.info "getting table_path folders of #{path}"
     ret_code, files = shell_cmd("hadoop fs -du #{path}")
     files.map { |line| line.split(/\s+/).reverse }.sort_by { |folder, size| size }
   end
@@ -69,11 +69,11 @@ class RunBackup
   end
 
   def shell_cmd(cmd)
-    log.info "cmd = '#{cmd}'"
+    start = Time.now
     result = %x[#{cmd}]
     result = result.split("\n") if result
     exitstatus = $?.exitstatus
-    log.info "cmd = '#{cmd}' exit:#{exitstatus}"
+    log.info "cmd = '#{cmd}' exit:#{exitstatus} time:#{'%.1f' % (Time.now-start)}"
     return exitstatus, result
   end
 
