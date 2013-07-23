@@ -3,9 +3,10 @@ require_relative 'logging'
 class RunBackup
   include Logging
 
-  def initialize(hdfs_path, s3_dir)
+  def initialize(hdfs_path, s3_dir, report_only=false)
     @hdfs_path = hdfs_path
     @s3_dir = s3_dir
+    @report_only = report_only
   end
 
   def start_backup()
@@ -15,33 +16,70 @@ class RunBackup
     total_size = get_size_from_folders(hdfs_tables)
     report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{total_size}"
 
+
+    create_report(hdfs_tables)
+
+    process(hdfs_tables) unless @report_only
+  end
+
+  def create_report(hdfs_tables)
+    process(hdfs_tables, true)
+  end
+
+  def process(hdfs_tables, report_only=false)
+    @report = Hash.new { |hash, key| hash[key] = [] }
     hdfs_tables.each do |table_path, size|
       table_name = get_last_name_from_path(table_path)
       report_status "processing:'#{table_path}' size: #{size}"
 
-      process_sub_folders(table_name, table_path)
+      process_sub_folders(table_name, table_path, report_only)
     end
+    format_report
   end
 
-  def process_sub_folders(table_name, table_path)
+  def process_sub_folders(table_name, table_path, report_only=false)
     mkdir("hdfs-to-s3/#{table_name}")
 
     s3_files = get_s3_files(table_name)
 
-    get_catalogs_with_size(table_path).each do |hdfs_file_path, file_size|
+    get_catalogs_with_size(table_path).each do |hdfs_file_path, hdfs_file_size|
       file_name = get_last_name_from_path(hdfs_file_path)
-      log.info "hdsf_file '#{hdfs_file_path}' size:#{file_size}"
+      log.info "hdsf_file '#{hdfs_file_path}' size:#{hdfs_file_size}"
 
-      unless file_exist_in_s3?(s3_files, file_name, file_size, table_name)
-        process_file(file_name, hdfs_file_path, table_name)
+      size_from_s3_file = s3_files[file_name]
+      unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size+'1', table_name)
+        process_file(file_name, hdfs_file_path, table_name) unless report_only
       end
+      @report[table_name] << [file_name, hdfs_file_size, size_from_s3_file]
     end
     rm_dir("hdfs-to-s3/#{table_name}")
   end
 
-  def file_exist_in_s3?(s3_files, file_name, file_size, table_name)
-    size_from_s3_file = s3_files[file_name]
+  def format_report()
+    report_status "---- #{@s3_dir} ----"
+    @report.each do |table, files|
+      size_of_all_hdfs_files = files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      size_of_all_s3_files = files.map { |file_name, hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
 
+      diff_files = files.find_all { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
+      size_of_diff_files = diff_files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+
+      report_status "#{table} all cnt:#{files.length} hdfs_size:#{to_gbyte size_of_all_hdfs_files} s3_size:#{to_gbyte size_of_all_s3_files}"
+      report_status "#{table} diff cnt:#{diff_files.length} hdfs_size:#{to_gbyte size_of_diff_files}"
+    end
+    report_status '----'
+  end
+
+  def to_gbyte(num)
+    n = num.to_f
+    return "#{num} bytes" if n < 10**3
+    return '%.2f kb' % (n / 10**3) if n < 10**6
+    return '%.2f Mb' % (n / 10**6) if n < 10**9
+    return '%.2f Gb' % (n / 10**9) if n < 10**12
+    '%.2f Tb' % (n / 10**12)
+  end
+
+  def file_exist_in_s3?(size_from_s3_file, file_name, file_size, table_name)
     unless size_from_s3_file
       log.info "#{file_name} not found in #{table_name} at s3:#{@s3_dir}/#{table_name}"
       return false
@@ -89,7 +127,6 @@ class RunBackup
   def get_size_from_folders(folders='')
     folders.map { |folder, size| size.to_i }.inject(0, :+)
   end
-
 
   def get_files_with_size(path)
     shell_cmd("hadoop fs -du #{path}")

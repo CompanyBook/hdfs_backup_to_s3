@@ -3,7 +3,7 @@ require_relative '../lib/run_backup'
 
 module Logging
   def self.create
-    Logger.new(STDOUT)
+    Logger.new(nil)
   end
 end
 
@@ -19,6 +19,10 @@ describe RunBackup do
     files = RunBackup.new().get_s3_files('BACKUP-FULL-TAKE-4-2013.06.10', 'web_crawl-0-1370732400000-FULL-1370732400000')
     puts '-------'
     puts files
+  end
+
+  it 'should convert to GigaBytes' do
+    puts back.to_gbyte('100000000000')
   end
 
 end
