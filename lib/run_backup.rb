@@ -55,7 +55,7 @@ class RunBackup
   end
 
   def get_s3_files(table_name)
-    ret_code, result = shell_cmd("s3cmd ls s3://companybook-backup/#{@s3_dir}/#{table_name}/")
+    result = shell_cmd("s3cmd ls s3://companybook-backup/#{@s3_dir}/#{table_name}/")
     map = {}
     result.map { |line| line.split(/\s+/)[2..3] }.each do |size, path|
       file_name = get_last_name_from_path(path)
@@ -73,8 +73,7 @@ class RunBackup
   def transfer_to_s3(file_name, table_name)
     return 0 if file_name == '_logs'
     with_retry(50, "#{file_name} => #{@s3_dir}") {
-      ret_code, files = shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
-      ret_code
+      shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
     }
   end
 
@@ -83,7 +82,7 @@ class RunBackup
   end
 
   def get_catalogs_with_size(path='')
-    ret_code, files = shell_cmd("hadoop fs -du #{path}")
+    files = shell_cmd("hadoop fs -du #{path}")
     files.map { |line| line.split(/\s+/).reverse }.sort_by { |folder, size| size }
   end
 
@@ -101,20 +100,25 @@ class RunBackup
     result = %x[#{cmd}]
     result = result.split("\n") if result
     exitstatus = $?.exitstatus
-    log.info "cmd:'#{cmd}' exit:#{exitstatus} time:#{'%.1f' % (Time.now-start)}"
-    return exitstatus, result
+    log.info "cmd:'#{cmd}' time:#{'%.1f' % (Time.now-start)}"
+    raise "exitstatus = #{exitstatus} for #{cmd}" if exitstatus != 0
+    result
   end
 
   def with_retry(retry_cnt, msg, &code)
+    exception = nil
     (1..retry_cnt).each do |i|
-      r_code = code.call()
-      return if r_code == 0
-      sleep_time = 10*i
-      log.warn msg
-      log.warn "retry:#{i} sleeping:#{sleep_time}"
-      sleep sleep_time
+      begin
+        return code.call()
+      rescue => ex
+        exception = ex
+        sleep_time = 10*i
+        logger.warn "#{ex.class}:#{ex.message}\n#{msg}\n#{ex.backtrace.join("\n")}"
+        logger.warn "retry:#{i} sleeping:#{sleep_time}"
+        sleep sleep_time
+      end
     end
-    raise "retry #{retry_cnt} failed: #{msg}"
+    raise exception
   end
 
   def mkdir(dir)
