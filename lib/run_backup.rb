@@ -57,16 +57,25 @@ class RunBackup
 
   def format_report()
     report_status "---- #{@s3_dir} ----"
+    hdfs_size = 0
+    s3_size = 0
+    diff_size = 0
     @report.each do |table, files|
       size_of_all_hdfs_files = files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      hdfs_size += size_of_all_hdfs_files
       size_of_all_s3_files = files.map { |file_name, hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
+      s3_size += size_of_all_s3_files
 
       diff_files = files.find_all { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
       size_of_diff_files = diff_files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      diff_size += size_of_diff_files
 
       report_status "#{table} all cnt:#{files.length} hdfs_size:#{to_gbyte size_of_all_hdfs_files} s3_size:#{to_gbyte size_of_all_s3_files}"
       report_status "#{table} diff cnt:#{diff_files.length} hdfs_size:#{to_gbyte size_of_diff_files}"
     end
+    report_status "hdfs_size     : #{to_gbyte hdfs_size}"
+    report_status "s3_size       : #{to_gbyte s3_size}"
+    report_status "missing in s3 : #{to_gbyte diff_size}"
     report_status '----'
   end
 

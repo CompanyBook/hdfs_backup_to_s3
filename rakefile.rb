@@ -7,13 +7,14 @@ RSpec::Core::RakeTask.new(:spec) do |t|
 end
 
 desc "back hdfs to s3"
-task :backup, [:hdfs_path, :s3_dir] do |t, args|
+task :backup, [:hdfs_path, :s3_dir, :report_only] do |t, args|
   args.with_defaults(
     :hdfs_path => '/user/ben/BACKUP',
     :s3_dir => 'BACKUP-FULL-TAKE-4-2013.06.10',
+    :report_only => true
   )
   p args
-  RunBackup.new.start_backup(args[:hdfs_path], args[:s3_dir])
+  RunBackup.new(args[:hdfs_path], args[:s3_dir], args[:report_only]).start_backup()
 end
 
 
