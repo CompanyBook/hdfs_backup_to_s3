@@ -16,7 +16,6 @@ class RunBackup
     total_size = get_size_from_folders(hdfs_tables)
     report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{total_size}"
 
-
     create_report(hdfs_tables)
 
     process(hdfs_tables) unless @report_only
@@ -30,7 +29,7 @@ class RunBackup
     @report = Hash.new { |hash, key| hash[key] = [] }
     hdfs_tables.each do |table_path, size|
       table_name = get_last_name_from_path(table_path)
-      report_status "processing:'#{table_path}' size: #{size}"
+      report_status "processing:'#{table_path}' size: #{to_gbyte size}"
 
       process_sub_folders(table_name, table_path, report_only)
     end
@@ -72,6 +71,7 @@ class RunBackup
 
       report_status "#{table} all cnt:#{files.length} hdfs_size:#{to_gbyte size_of_all_hdfs_files} s3_size:#{to_gbyte size_of_all_s3_files}"
       report_status "#{table} diff cnt:#{diff_files.length} hdfs_size:#{to_gbyte size_of_diff_files}"
+      report_status "#{diff_files.map { |file_name, hdsf_file_size, s3_file_size| file_name }}"
     end
     report_status "hdfs_size     : #{to_gbyte hdfs_size}"
     report_status "s3_size       : #{to_gbyte s3_size}"
@@ -130,7 +130,7 @@ class RunBackup
 
   def get_catalogs_with_size(path='')
     files = shell_cmd("hadoop fs -du #{path}")
-    files.map { |line| line.split(/\s+/).reverse }.sort_by { |folder, size| size }
+    files.map { |line| line.split(/\s+/).reverse }.sort_by { |folder, size| size }.find_all { |folder, size| !folder.end_with? '_logs' }
   end
 
   def get_size_from_folders(folders='')
@@ -176,7 +176,7 @@ class RunBackup
   end
 
   def rm_file(path)
-    shell_cmd "rm -f #{path}"
+    shell_cmd "rm -rf #{path}"
   end
 
   def report_status(msg)
