@@ -23,17 +23,16 @@ class RunBackup
     get_catalogs_with_size(table_path).each do |hdfs_file_path, file_size|
       file_name = get_last_name_from_path(hdfs_file_path)
       log.info "hdsf_file '#{hdfs_file_path}' size:#{file_size}"
-      copy_local(hdfs_file_path, file_name, file_size, table_name) do |local_file, folder|
-        transfer_to_s3(local_file, folder, s3_dir)
-      end
+
+      process_file(file_name, hdfs_file_path, s3_dir, table_name)
     end
     rm_dir("hdfs-to-s3/#{table_name}")
   end
 
-  def copy_local(hdfs_file_path, file_name, file_size, folder, &block)
-    shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{folder}")
-    block.call(file_name, folder)
-    rm_file "hdfs-to-s3/#{folder}/#{file_name}"
+  def process_file(file_name, hdfs_file_path, s3_dir, table_name)
+    shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{table_name}")
+    transfer_to_s3(file_name, table_name, s3_dir)
+    rm_file "hdfs-to-s3/#{table_name}/#{file_name}"
   end
 
   def transfer_to_s3(file, folder, s3_dir)
