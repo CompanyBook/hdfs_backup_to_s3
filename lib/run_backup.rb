@@ -3,42 +3,77 @@ require_relative 'logging'
 class RunBackup
   include Logging
 
-  def start_backup(hdfs_path, s3_dir)
+  def initialize(hdfs_path, s3_dir)
+    @hdfs_path = hdfs_path
+    @s3_dir = s3_dir
+  end
+
+  def start_backup()
     mkdir('hdfs-to-s3')
 
-    hdfs_tables = get_catalogs_with_size(hdfs_path)
+    hdfs_tables = get_catalogs_with_size(@hdfs_path)
     total_size = get_size_from_folders(hdfs_tables)
-    report_status "processing root folder '#{hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{total_size}"
+    report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{total_size}"
 
     hdfs_tables.each do |table_path, size|
       table_name = get_last_name_from_path(table_path)
       report_status "processing:'#{table_path}' size: #{size}"
 
-      process_sub_folders(s3_dir, table_name, table_path)
+      process_sub_folders(table_name, table_path)
     end
   end
 
-  def process_sub_folders(s3_dir, table_name, table_path)
+  def process_sub_folders(table_name, table_path)
     mkdir("hdfs-to-s3/#{table_name}")
+
+    s3_files = get_s3_files(table_name)
+
     get_catalogs_with_size(table_path).each do |hdfs_file_path, file_size|
       file_name = get_last_name_from_path(hdfs_file_path)
       log.info "hdsf_file '#{hdfs_file_path}' size:#{file_size}"
 
-      process_file(file_name, hdfs_file_path, s3_dir, table_name)
+      unless file_exist_in_s3?(s3_files, file_name, file_size, table_name)
+        process_file(file_name, hdfs_file_path, table_name)
+      end
     end
     rm_dir("hdfs-to-s3/#{table_name}")
   end
 
-  def process_file(file_name, hdfs_file_path, s3_dir, table_name)
+  def file_exist_in_s3?(s3_files, file_name, file_size, table_name)
+    size_from_s3_file = s3_files[file_name]
+
+    unless size_from_s3_file
+      log.info "#{file_name} not found in #{table_name} at s3:#{@s3_dir}/#{table_name}"
+      return false
+    end
+
+    if file_size != size_from_s3_file
+      log.warn "hdfs_file_size(#{file_size}) != size_from_s3_file(#{size_from_s3_file}) for #{table_name}/#{file_name}"
+      return false
+    end
+    true
+  end
+
+  def get_s3_files(table_name)
+    ret_code, result = shell_cmd("s3cmd ls s3://companybook-backup/#{@s3_dir}/#{table_name}/")
+    map = {}
+    result.map { |line| line.split(/\s+/)[2..3] }.each do |size, path|
+      file_name = get_last_name_from_path(path)
+      map[file_name] = size
+    end
+    map
+  end
+
+  def process_file(file_name, hdfs_file_path, table_name)
     shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{table_name}")
-    transfer_to_s3(file_name, table_name, s3_dir)
+    transfer_to_s3(file_name, table_name)
     rm_file "hdfs-to-s3/#{table_name}/#{file_name}"
   end
 
-  def transfer_to_s3(file, folder, s3_dir)
-    return 0 if file == '_logs'
-    with_retry(50, "#{file} => #{s3_dir}") {
-      ret_code, files = shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{folder}/#{file} s3://companybook-backup/#{s3_dir}/#{folder}/#{file}")
+  def transfer_to_s3(file_name, table_name)
+    return 0 if file_name == '_logs'
+    with_retry(50, "#{file_name} => #{@s3_dir}") {
+      ret_code, files = shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
       ret_code
     }
   end
