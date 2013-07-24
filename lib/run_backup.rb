@@ -14,7 +14,7 @@ class RunBackup
 
     hdfs_tables = get_catalogs_with_size(@hdfs_path)
     total_size = get_size_from_folders(hdfs_tables)
-    report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{total_size}"
+    report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{to_gbyte total_size}"
 
     create_report(hdfs_tables)
 
@@ -46,7 +46,7 @@ class RunBackup
       log.info "hdsf_file '#{hdfs_file_path}' size:#{hdfs_file_size}"
 
       size_from_s3_file = s3_files[file_name]
-      unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size+'1', table_name)
+      unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size, table_name)
         process_file(file_name, hdfs_file_path, table_name) unless report_only
       end
       @report[table_name] << [file_name, hdfs_file_size, size_from_s3_file]
@@ -56,35 +56,37 @@ class RunBackup
 
   def format_report()
     report_status "---- #{@s3_dir} ----"
-    hdfs_size = 0
-    s3_size = 0
-    diff_size = 0
+    total_hdfs_size = 0
+    total_s3_size = 0
+    total_diff_size = 0
     @report.each do |table, files|
-      size_of_all_hdfs_files = files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
-      hdfs_size += size_of_all_hdfs_files
-      size_of_all_s3_files = files.map { |file_name, hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
-      s3_size += size_of_all_s3_files
+      size_hdfs = files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      total_hdfs_size += size_hdfs
+      size_s3 = files.map { |file_name, hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
+      total_s3_size += size_s3
 
       diff_files = files.find_all { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
+      diff_size_only = files.find_all { |file_name, hdsf_file_size, s3_file_size| s3_file_size != nil && hdsf_file_size!=s3_file_size }
+      s3_file_cnt = files.find_all { |file_name, hdsf_file_size, s3_file_size| s3_file_size != nil  }.length
       size_of_diff_files = diff_files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
-      diff_size += size_of_diff_files
+      total_diff_size += size_of_diff_files
 
-      report_status "#{table} all cnt:#{files.length} hdfs_size:#{to_gbyte size_of_all_hdfs_files} s3_size:#{to_gbyte size_of_all_s3_files}"
-      report_status "#{table} diff cnt:#{diff_files.length} hdfs_size:#{to_gbyte size_of_diff_files}"
-      report_status "#{diff_files.map { |file_name, hdsf_file_size, s3_file_size| file_name }}"
+      if size_s3 != size_hdfs
+        report_status "#{table} hdfs:#{files.length}(#{to_gbyte size_hdfs}) s3:#{s3_file_cnt}(#{to_gbyte size_s3}) missing:#{diff_files.length}(#{to_gbyte size_of_diff_files}) diff_size_only_cnt:#{diff_size_only.length}"
+      end
     end
-    report_status "hdfs_size     : #{to_gbyte hdfs_size}"
-    report_status "s3_size       : #{to_gbyte s3_size}"
-    report_status "missing in s3 : #{to_gbyte diff_size}"
+    report_status "hdfs_size     : #{to_gbyte total_hdfs_size}"
+    report_status "s3_size       : #{to_gbyte total_s3_size}"
+    report_status "missing in s3 : #{to_gbyte total_diff_size}"
     report_status '----'
   end
 
   def to_gbyte(num)
     n = num.to_f
     return "#{num} bytes" if n < 10**3
-    return '%.2f kb' % (n / 10**3) if n < 10**6
-    return '%.2f Mb' % (n / 10**6) if n < 10**9
-    return '%.2f Gb' % (n / 10**9) if n < 10**12
+    return '%.0f kb' % (n / 10**3) if n < 10**6
+    return '%.0f Mb' % (n / 10**6) if n < 10**9
+    return '%.1f Gb' % (n / 10**9) if n < 10**12
     '%.2f Tb' % (n / 10**12)
   end
 
