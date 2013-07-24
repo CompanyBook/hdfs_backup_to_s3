@@ -16,13 +16,17 @@ class RunBackup
     total_size = get_size_from_folders(hdfs_tables)
     report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{to_gbyte total_size}"
 
-    create_report(hdfs_tables)
+    report_status ' --- creating report ---'
+    bytes_missing_in_s3 = create_report(hdfs_tables)
 
-    process(hdfs_tables) unless @report_only
+    return if bytes_missing_in_s3 == 0 || @report_only
+    report_status ' --- execute copy to s3 ---'
+    process(hdfs_tables)
   end
 
   def create_report(hdfs_tables)
     process(hdfs_tables, true)
+    format_report
   end
 
   def process(hdfs_tables, report_only=false)
@@ -33,7 +37,6 @@ class RunBackup
 
       process_sub_folders(table_name, table_path, report_only)
     end
-    format_report
   end
 
   def process_sub_folders(table_name, table_path, report_only=false)
@@ -47,7 +50,7 @@ class RunBackup
 
       size_from_s3_file = s3_files[file_name]
       unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size, table_name)
-        process_file(file_name, hdfs_file_path, table_name) unless report_only
+        process_file(file_name, hdfs_file_path, table_name, hdfs_file_size) unless report_only
       end
       @report[table_name] << [file_name, hdfs_file_size, size_from_s3_file]
     end
@@ -79,11 +82,12 @@ class RunBackup
     report_status "s3_size       : #{to_gbyte total_s3_size}"
     report_status "missing in s3 : #{to_gbyte total_diff_size}"
     report_status '----'
+    total_diff_size
   end
 
   def to_gbyte(num)
     n = num.to_f
-    return "#{num} bytes" if n < 10**3
+    return '%.0f bytes' % n if n < 10**3
     return '%.0f kb' % (n / 10**3) if n < 10**6
     return '%.0f Mb' % (n / 10**6) if n < 10**9
     return '%.1f Gb' % (n / 10**9) if n < 10**12
@@ -113,17 +117,21 @@ class RunBackup
     map
   end
 
-  def process_file(file_name, hdfs_file_path, table_name)
+  def process_file(file_name, hdfs_file_path, table_name, hdfs_file_size)
     shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{table_name}")
-    transfer_to_s3(file_name, table_name)
+    transfer_to_s3(file_name, table_name, hdfs_file_size)
     rm_file "hdfs-to-s3/#{table_name}/#{file_name}"
   end
 
-  def transfer_to_s3(file_name, table_name)
+  def transfer_to_s3(file_name, table_name, hdfs_file_size)
     return 0 if file_name == '_logs'
+    start = Time.now
     with_retry(50, "#{file_name} => #{@s3_dir}") {
       shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
     }
+    time_used = Time.now-start
+    speed = hdfs_file_size.to_f / time_used
+    report_status "==> s3:#{table_name}/#{file_name} - #{to_gbyte hdfs_file_size} #{'%.1f' % time_used}s #{to_gbyte speed}/s"
   end
 
   def get_last_name_from_path(sub)
