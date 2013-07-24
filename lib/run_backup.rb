@@ -43,17 +43,23 @@ class RunBackup
     mkdir("hdfs-to-s3/#{table_name}")
 
     s3_files = get_s3_files(table_name)
-
+    transferred_s3_for_table = 0
     get_catalogs_with_size(table_path).each do |hdfs_file_path, hdfs_file_size|
       file_name = get_last_name_from_path(hdfs_file_path)
       log.info "hdsf_file '#{hdfs_file_path}' size:#{hdfs_file_size}"
 
       size_from_s3_file = s3_files[file_name]
+      time_used = 0
       unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size, table_name)
-        process_file(file_name, hdfs_file_path, table_name, hdfs_file_size) unless report_only
+        time_used = process_file(file_name, hdfs_file_path, table_name, hdfs_file_size) unless report_only
+        transferred_s3_for_table += hdfs_file_size.to_i
       end
-      @report[table_name] << [file_name, hdfs_file_size, size_from_s3_file]
+      @report[table_name] << [hdfs_file_size, size_from_s3_file, time_used]
+
     end
+    time_used_for_s3_table = @report[table_name].map { |it| it[2] }.inject(0, :+)
+    report_status "==> s3[#{to_gbyte transferred_s3_for_table}] for #{table_name} #{'%.1f' % time_used_for_s3_table }s" unless report_only
+
     rm_dir("hdfs-to-s3/#{table_name}")
   end
 
@@ -63,15 +69,15 @@ class RunBackup
     total_s3_size = 0
     total_diff_size = 0
     @report.each do |table, files|
-      size_hdfs = files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      size_hdfs = files.map { |hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
       total_hdfs_size += size_hdfs
-      size_s3 = files.map { |file_name, hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
+      size_s3 = files.map { |hdsf_file_size, s3_file_size| s3_file_size.to_i }.inject(0, :+)
       total_s3_size += size_s3
 
-      diff_files = files.find_all { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
-      diff_size_only = files.find_all { |file_name, hdsf_file_size, s3_file_size| s3_file_size != nil && hdsf_file_size!=s3_file_size }
-      s3_file_cnt = files.find_all { |file_name, hdsf_file_size, s3_file_size| s3_file_size != nil  }.length
-      size_of_diff_files = diff_files.map { |file_name, hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
+      diff_files = files.find_all { |hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
+      diff_size_only = files.find_all { |hdsf_file_size, s3_file_size| s3_file_size != nil && hdsf_file_size!=s3_file_size }
+      s3_file_cnt = files.find_all { |hdsf_file_size, s3_file_size| s3_file_size != nil  }.length
+      size_of_diff_files = diff_files.map { |hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
       total_diff_size += size_of_diff_files
 
       if size_s3 != size_hdfs
@@ -119,8 +125,9 @@ class RunBackup
 
   def process_file(file_name, hdfs_file_path, table_name, hdfs_file_size)
     shell_cmd("hadoop fs -copyToLocal #{hdfs_file_path} hdfs-to-s3/#{table_name}")
-    transfer_to_s3(file_name, table_name, hdfs_file_size)
+    time_used = transfer_to_s3(file_name, table_name, hdfs_file_size)
     rm_file "hdfs-to-s3/#{table_name}/#{file_name}"
+    time_used
   end
 
   def transfer_to_s3(file_name, table_name, hdfs_file_size)
@@ -132,6 +139,7 @@ class RunBackup
     time_used = Time.now-start
     speed = hdfs_file_size.to_f / time_used
     report_status "==> s3:#{table_name}/#{file_name} - #{to_gbyte hdfs_file_size} #{'%.1f' % time_used}s #{to_gbyte speed}/s"
+    time_used
   end
 
   def get_last_name_from_path(sub)
