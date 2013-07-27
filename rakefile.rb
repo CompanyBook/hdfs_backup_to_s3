@@ -14,7 +14,8 @@ task :backup, [:hdfs_path, :s3_dir, :report_only] do |t, args|
     :report_only => true
   )
   p args
-  RunBackup.new(args[:hdfs_path], args[:s3_dir], args[:report_only]).start_backup()
+  report_only = args[:report_only].downcase == 'true' ? true : false
+  RunBackup.new(args[:hdfs_path], args[:s3_dir], report_only).start_backup()
 end
 
 
