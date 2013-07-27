@@ -1,3 +1,4 @@
+require 'flowdock'
 require_relative 'logging'
 
 class RunBackup
@@ -7,6 +8,8 @@ class RunBackup
     @hdfs_path = hdfs_path
     @s3_dir = s3_dir
     @report_only = report_only
+    args = File.exist? 'config.yml' ? YAML::load(File.open('config.yml')) : {}
+    @flowdock_key = args[:flowdock_key]
   end
 
   def start_backup()
@@ -17,11 +20,18 @@ class RunBackup
     report_status "processing root folder '#{@hdfs_path}' with #{hdfs_tables.length} folders. Total size=#{to_gbyte total_size}"
 
     report_status ' --- creating report ---'
-    bytes_missing_in_s3 = create_report(hdfs_tables)
+    bytes_missing_in_s3, report = create_report(hdfs_tables)
+    report_status report
 
+
+    report_status "bytes_missing_in_s3 #{bytes_missing_in_s3}"
     return if bytes_missing_in_s3 == 0 || @report_only
     report_status ' --- execute copy to s3 ---'
+
     process(hdfs_tables)
+    bytes_missing_in_s3, report = create_report(hdfs_tables)
+    report_status report
+    to_flowdock("#{@hdfs_path} done", report)
   end
 
   def create_report(hdfs_tables)
@@ -52,19 +62,34 @@ class RunBackup
       time_used = 0
       unless file_exist_in_s3?(size_from_s3_file, file_name, hdfs_file_size, table_name)
         time_used = process_file(file_name, hdfs_file_path, table_name, hdfs_file_size) unless report_only
-        transferred_s3_for_table += hdfs_file_size.to_i
+        transferred_s3_for_table += hdfs_file_size.to_i unless report_only
       end
       @report[table_name] << [hdfs_file_size, size_from_s3_file, time_used]
 
     end
     time_used_for_s3_table = @report[table_name].map { |it| it[2] }.inject(0, :+)
-    report_status "==> s3[#{to_gbyte transferred_s3_for_table}] for #{table_name} #{'%.1f' % time_used_for_s3_table }s" unless report_only
+    msg = "s3[#{to_gbyte transferred_s3_for_table}] for #{table_name} #{'%.1f' % time_used_for_s3_table }s"
+
+    if transferred_s3_for_table > 0 && !report_only
+      report_status "==> #{msg}"
+      to_flowdock("#{table_name} done", msg) if transferred_s3_for_table > 0
+    end
 
     rm_dir("hdfs-to-s3/#{table_name}")
   end
 
+  def to_flowdock(subject, msg)
+    return unless @flowdock_key
+    flow = Flowdock::Flow.new(:api_token => @flowdock_key,
+                              :source => "S3 Backup", :from => {:name => 'S3 Backup', :address => "s3_backup@companybook.no"})
+
+    flow.push_to_team_inbox(:subject => subject,
+                            :content => msg)
+                            #:tags => ["index"], :link => "http://#{@dest_server}:#{port_from_version}/solr/"
+  end
+
   def format_report()
-    report_status "---- #{@s3_dir} ----"
+    report = "#{@s3_dir} \n"
     total_hdfs_size = 0
     total_s3_size = 0
     total_diff_size = 0
@@ -76,19 +101,18 @@ class RunBackup
 
       diff_files = files.find_all { |hdsf_file_size, s3_file_size| hdsf_file_size!=s3_file_size }
       diff_size_only = files.find_all { |hdsf_file_size, s3_file_size| s3_file_size != nil && hdsf_file_size!=s3_file_size }
-      s3_file_cnt = files.find_all { |hdsf_file_size, s3_file_size| s3_file_size != nil  }.length
+      s3_file_cnt = files.find_all { |hdsf_file_size, s3_file_size| s3_file_size != nil }.length
       size_of_diff_files = diff_files.map { |hdsf_file_size, s3_file_size| hdsf_file_size.to_i }.inject(0, :+)
       total_diff_size += size_of_diff_files
 
       if size_s3 != size_hdfs
-        report_status "#{table} hdfs:#{files.length}(#{to_gbyte size_hdfs}) s3:#{s3_file_cnt}(#{to_gbyte size_s3}) missing:#{diff_files.length}(#{to_gbyte size_of_diff_files}) diff_size_only_cnt:#{diff_size_only.length}"
+        report << "#{table} hdfs:#{files.length}(#{to_gbyte size_hdfs}) s3:#{s3_file_cnt}(#{to_gbyte size_s3}) missing:#{diff_files.length}(#{to_gbyte size_of_diff_files}) diff_size_only_cnt:#{diff_size_only.length}\n"
       end
     end
-    report_status "hdfs_size     : #{to_gbyte total_hdfs_size}"
-    report_status "s3_size       : #{to_gbyte total_s3_size}"
-    report_status "missing in s3 : #{to_gbyte total_diff_size}"
-    report_status '----'
-    total_diff_size
+    report << "hdfs_size     : #{to_gbyte total_hdfs_size}\n"
+    report << "s3_size       : #{to_gbyte total_s3_size}\n"
+    report << "missing in s3 : #{to_gbyte total_diff_size}\n"
+    return total_diff_size, report
   end
 
   def to_gbyte(num)
