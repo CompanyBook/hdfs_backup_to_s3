@@ -158,7 +158,12 @@ class RunBackup
     return 0 if file_name == '_logs'
     start = Time.now
     with_retry(50, "#{file_name} => #{@s3_dir}") {
-      shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
+      result = shell_cmd("s3cmd --no-encrypt put hdfs-to-s3/#{table_name}/#{file_name} s3://companybook-backup/#{@s3_dir}/#{table_name}/#{file_name}")
+      report_status result
+      unless result[0].start_with?("File 'hdfs-to-s3/#{table_name}/#{file_name}' stored as")
+        raise result
+      end
+      result
     }
     time_used = Time.now-start
     speed = hdfs_file_size.to_f / time_used
@@ -201,8 +206,8 @@ class RunBackup
       rescue => ex
         exception = ex
         sleep_time = 10*i
-        logger.warn "#{ex.class}:#{ex.message}\n#{msg}\n#{ex.backtrace.join("\n")}"
-        logger.warn "retry:#{i} sleeping:#{sleep_time}"
+        log.warn "#{ex.class}:#{ex.message}\n#{msg}\n#{ex.backtrace.join("\n")}"
+        log.warn "retry:#{i} sleeping:#{sleep_time}"
         sleep sleep_time
       end
     end
