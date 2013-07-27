@@ -8,7 +8,7 @@ class RunBackup
     @hdfs_path = hdfs_path
     @s3_dir = s3_dir
     @report_only = report_only
-    args = File.exist? 'config.yml' ? YAML::load(File.open('config.yml')) : {}
+    args = File.exist?('config.yml') ? YAML::load(File.open('config.yml')) : {}
     @flowdock_key = args[:flowdock_key]
   end
 
